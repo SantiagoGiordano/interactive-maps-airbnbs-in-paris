@@ -21,56 +21,43 @@ p_load(ggplot2, dplyr, broom, magrittr, rvest, janitor, tidyr, patchwork, leafle
 
 <!-- badges: end -->
 
-| I aggregate data from the Inside Airbnb initiative (see below) for over 50,000 individual listings in Paris to find the total number of listings by *arrondissement* (i.e., district). In turn, I use webscraped data of the population of each arrondissement to find the density of listings for every 1000 people and by square kilometre. Lastly, I also find the average nightly rate in each area, and plot all these aggregations in interactive maps using `leaflet`.
+\| I aggregate data from the Inside Airbnb initiative (see below) for over 50,000 individual listings in Paris to find the total number of listings by *arrondissement* (i.e., district). In turn, I use webscraped data of the population of each arrondissement to find the density of listings for every 1000 people and by square kilometre. Lastly, I also find the average nightly rate in each area, and plot all these aggregations in interactive maps using `leaflet`.
 
-## Data
+## Data cleaning and wrangling
 
 -   Load data from Inside Airbnb (one dataset for individual lisitings and one with the spatial coordinates of each arrondissement)
 
-```{r load-data-locally, message=FALSE, warning=FALSE, eval=FALSE, include=FALSE}
-# Load data for individual listings in paris
-  # Set working directory to folder with csv files (ie, "data")
-setwd("/Users/santiagogiordano/Documents/R_Stuff/GitHub_Repos/interactive-map-paris/data/")
-  # Create list with csv files
-paris_csvs <- list.files(path = "/Users/santiagogiordano/Documents/R_Stuff/GitHub_Repos/interactive-map-paris/data/", 
-                         pattern = "*.csv")
-  # Read files
-paris_listings2 <- plyr::ldply(paris_csvs, read.csv) %>% 
-    # Get rid of index column created by the loading function
-    select(-X)
-  # Reset working directory
-setwd("/Users/santiagogiordano/Documents/R_Stuff/GitHub_Repos/interactive-map-paris/")
-```
 
-```{r load-data-from-source, message=FALSE, warning=FALSE}
+```{r load-data-from-source, message=FALSE, warning=FALSE, echo=TRUE, quiet=TRUE}
 # Load data for individual listings from website
 paris_listings <- fread(
   'http://data.insideairbnb.com/france/ile-de-france/paris/2022-09-09/visualisations/listings.csv')
 
 # Read in shapefile of neighbourhoods and create sf object
-paris_nhoods_geodata <- st_read(here::here("data", 
-                                           "paris_neighbourhoods.nosync.geojson")) %>% 
+paris_nhoods_geodata <- 
+  st_read(here::here("data", "paris_neighbourhoods.nosync.geojson"), quiet = TRUE) %>% 
   # Get rid of unsused variables
   select(-neighbourhood_group)
 
 ```
 
--   Clean and aggregate data by neighbourhood (arrondissement)
+-   Clean and aggregate data by *arrondissement*
 
-```{r clean1, warning=FALSE}
+```{r clean1, warning=FALSE, echo=TRUE}
 # Get rid of dollar sign in price variable, and convert to numeric 
-paris_listings$price <-as.integer(gsub("\\$", "", paris_listings$price))
+paris_listings$price <- as.integer(gsub("\\$", "", paris_listings$price))
 ```
 
-```{r}
-# Aggregate number of listings and avergage prices by neighbourhood
+```{r aggregate-data}
+# Aggregate number of listings and average prices by arrondissement/neighbourhood
 paris_list_and_avgP_nhood <- paris_listings %>% 
                                 # get rid of listings with no price
                                 subset(!(is.na(price))) %>% 
                                 # group data by neighbourhood/arrondissement
                                 group_by(neighbourhood) %>%
                                 # create new column with price avg in each neighborhood
-                                summarise(n_listings = n(), avg_price = mean(price)) %>% 
+                                summarise(n_listings = n(), 
+                                          avg_price = mean(price)) %>% 
                                 # round prices to 0 decimal points
                                 mutate(across(avg_price, round, 0))
 
@@ -78,11 +65,13 @@ paris_list_and_avgP_nhood <- paris_listings %>%
 # aggregate(price ~ neighbourhood_cleansed, data = paris_listings, function(x){sum(is.na(x))}, na.action = NULL)
 ```
 
--   Webscrape data for population and area of each arrondissement (used to find listings by population and by area)
+-   Webscrape data for population and area of each arrondissement (will be used to find listings by population and by area)
 
-```{r webscrape-paris}
+```{r webscrape-paris, echo=TRUE}
 # Read html address with arrondissements data from wikipedia (in italian)
-wiki_paris_it <- read_html("https://it.wikipedia.org/wiki/Arrondissement_municipali_di_Parigi")
+wiki_paris_it <- 
+  read_html("https://it.wikipedia.org/wiki/Arrondissement_municipali_di_Parigi")
+
 ## Scrape table with data for each arrondissement
 paris_arronds_it <- wiki_paris_it %>% 
   html_element(".wikitable :nth-child(1)") %>%
@@ -101,25 +90,24 @@ paris_arronds_it <- wiki_paris_it %>%
 
 ```
 
--   Merge aggregated data with webscraped data
+-   Merge aggregated listings data with webscraped data
 
-```{r merge-data}
+```{r merge-data, echo=TRUE}
 # Merge aggregated listings data with arrondissements data
 paris_arronds_full <- merge(paris_list_and_avgP_nhood, paris_arronds_it, 
                             by.x = "neighbourhood", by.y = "neighbourhood")
 ```
 
--   Create new variables for listings by population and by area
+-   Create new variables for listings population and by area:
+    -   Listings per 1000 inhabitants
 
-```{r calc-new-vars-paris}
+    -   Listings per square kilometre
+
+```{r calc-new-vars-paris, echo=TRUE}
 # Create new variables for listings and price by km2 and by population
 
-## Calculate listings per km2
-paris_arronds_full %<>% mutate(listings_km2 = (n_listings)/(area_km2),
-                               listings_km2 = round(listings_km2))
-
 ## Calculate listings per 1000 people
-  # Get rid of empty space in population column and convert variable to numeric class
+  # Get rid of empty space in population column & convert variable to numeric class
 paris_arronds_full$pop_2017 <- as.numeric(
   str_replace(paris_arronds_full$pop_2017,"\\s", ""))
   # Now create new variable for listings by population (and round new values)
@@ -127,11 +115,16 @@ paris_arronds_full %<>%
   mutate(listings_by_pop = (n_listings)/(pop_2017)*1000, 
          listings_by_pop = round(listings_by_pop))
 
+
+## Calculate listings per km2
+paris_arronds_full %<>% mutate(listings_km2 = (n_listings)/(area_km2),
+                               listings_km2 = round(listings_km2))
+
 ```
 
 -   Merge aggregated data with geospatial data
 
-```{r}
+```{r merge-agg-and-geo-data, echo=TRUE}
 # Merge geospatial data (sf object) with lyon airbnb listings data
 paris_merged <- merge(paris_arronds_full, paris_nhoods_geodata, 
                       by.x = "neighbourhood", by.y = "neighbourhood")
@@ -261,7 +254,7 @@ total_listings_map <- paris_merged_sf %>%
     options = layersControlOptions(collapsed=FALSE))
 
 #print map
-total_listings_map
+#total_listings_map
 
 # Save interactive map as widget
 saveWidget(total_listings_map, file=paste0(getwd(), "/html_widgets/paris_tot_listings.html"))
@@ -324,7 +317,7 @@ listings_by_pop_map <- paris_merged_sf %>%
     options = layersControlOptions(collapsed=FALSE))
 
 #print map
-listings_by_pop_map
+#listings_by_pop_map
 
 # Save interactive map as widget
 saveWidget(listings_by_pop_map, file=paste0(getwd(), "/html_widgets/paris_listings_by_pop.html"))
@@ -383,7 +376,7 @@ listings_by_area_map <- leaflet(width = "100%") %>%
     options = layersControlOptions(collapsed=FALSE))
 
 #print map
-listings_by_area_map
+#listings_by_area_map
 
 # Save interactive map as widget
 saveWidget(listings_by_area_map, file=paste0(getwd(), "/html_widgets/paris_listings_by_area.html"))
@@ -446,7 +439,7 @@ listings_price_map <- paris_merged_sf %>%
     options = layersControlOptions(collapsed=FALSE))
 
 #print map
-listings_price_map
+#listings_price_map
 
 # Save interactive map as widget
 saveWidget(listings_price_map, file=paste0(getwd(), "/html_widgets/paris_listings_price.html"))
@@ -454,4 +447,4 @@ saveWidget(listings_price_map, file=paste0(getwd(), "/html_widgets/paris_listing
 
 ## Data Source
 
-| The [data](http://insideairbnb.com/get-the-data) was sourced from the [Inside Airbnb Project](http://insideairbnb.com/about/) which provides webscraped data for Airbnb listings in cities throughout the globe. The data for Paris was last scraped in June 2022.
+\| The [data](http://insideairbnb.com/get-the-data) was sourced from the [Inside Airbnb Project](http://insideairbnb.com/about/) which provides webscraped data for Airbnb listings in cities throughout the globe. The data for Paris was last scraped in June 2022.
