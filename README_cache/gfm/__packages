@@ -1,0 +1,15 @@
+pacman
+ggplot2
+dplyr
+broom
+magrittr
+rvest
+janitor
+tidyr
+patchwork
+leaflet
+sf
+stringr
+htmlwidgets
+data.table
+sp
