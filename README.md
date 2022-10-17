@@ -115,7 +115,7 @@ paris_merged_sf <- st_as_sf(paris_merged) #%>% st_transform(8857)
 
 ## Interactive Plots
 
-#### A) Total Airbnb Listings
+#### A) [Total Airbnb Listings](https://github.com/SantiagoGiordano/interactive-maps-airbnbs-in-paris/blob/main/html_widgets/paris_tot_listings.html)
 
 #### B) Airbnb listings by population
 

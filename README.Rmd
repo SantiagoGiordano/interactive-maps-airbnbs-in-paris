@@ -198,7 +198,7 @@ paris_icons <- iconList(
 
 ```
 
-#### A) Total Airbnb Listings
+#### A) [Total Airbnb Listings](https://github.com/SantiagoGiordano/interactive-maps-airbnbs-in-paris/blob/main/html_widgets/paris_tot_listings.html)
 
 ```{r leaflet-tot-list}
 # Set a color palette
