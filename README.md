@@ -6,13 +6,13 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-\| I aggregate data from the Inside Airbnb initiative (see below) for
-over 50,000 individual listings in Paris to find the total number of
-listings by *arrondissement* (i.e., district). In turn, I use webscraped
-data of the population of each arrondissement to find the density of
-listings for every 1000 people and by square kilometre. Lastly, I also
-find the average nightly rate in each area, and plot all these
-aggregations in interactive maps using `leaflet`.
+I aggregate data from the Inside Airbnb initiative (see below) for over
+50,000 individual listings in Paris to find the total number of listings
+by *arrondissement* (i.e., district). In turn, I use webscraped data of
+the population of each arrondissement to find the density of listings
+for every 1000 people and by square kilometre. Lastly, I also find the
+average nightly rate in each area, and plot all these aggregations in
+interactive maps using `leaflet`.
 
 ## Data cleaning and wrangling
 
@@ -119,13 +119,13 @@ paris_merged_sf <- st_as_sf(paris_merged) #%>% st_transform(8857)
 
 #### B) Airbnb listings by population
 
-#### C) Airbnb listings by square kilometers
+#### C) Airbnb listings by square kilometer
 
 #### D) Average airbnb price by arrondissement
 
 ## Data Source
 
-\| The [data](http://insideairbnb.com/get-the-data) was sourced from the
+The [data](http://insideairbnb.com/get-the-data) was sourced from the
 [Inside Airbnb Project](http://insideairbnb.com/about/) which provides
 webscraped data for Airbnb listings in cities throughout the globe. The
 data for Paris was last scraped in June 2022.
