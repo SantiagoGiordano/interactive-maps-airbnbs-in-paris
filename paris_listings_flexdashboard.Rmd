@@ -1,0 +1,384 @@
+---
+title: "Plotting Airbnb Listings in Paris"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: scroll
+    theme: lumen
+---
+
+
+TRY MAKING ONE COLUMN AND ADD BRIEF COMMENTARY TO EACH MAP
+
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE, comment = "", message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(cache=TRUE) 
+```
+```{r pkgs, include=FALSE}
+library(flexdashboard)
+library(pacman)
+p_load(ggplot2, dplyr, broom, magrittr, rvest, janitor, tidyr, patchwork, leaflet, sf, stringr, htmlwidgets, data.table)
+```
+
+| I aggregate data from the Inside Airbnb initiative (see below) for over 50,000 individual listings in Paris to find the total number of listings by *arrondissement* (i.e., district). In turn, I use webscraped data of the population of each arrondissement to find the density of listings for every 1000 people and by square kilometre. Lastly, I also find the average nightly rate in each area, and plot all these aggregations in interactive maps using `leaflet`.
+
+|   
+|       
+
+```{r load-data-from-source, message=FALSE, warning=FALSE}
+# Load data for individual listings from website
+paris_listings <- fread(
+  'http://data.insideairbnb.com/france/ile-de-france/paris/2022-09-09/visualisations/listings.csv')
+
+# Read in shapefile of neighbourhoods and create sf object
+paris_nhoods_geodata <- 
+  st_read(here::here("data", "paris_neighbourhoods.nosync.geojson"), quiet = TRUE) %>% 
+  # Get rid of unsused variables
+  select(-neighbourhood_group)
+
+```
+
+
+```{r clean1, warning=FALSE}
+# Get rid of dollar sign in price variable, and convert to numeric 
+paris_listings$price <- as.integer(gsub("\\$", "", paris_listings$price))
+```
+
+```{r aggregate-data}
+# Aggregate number of listings and average prices by arrondissement/neighbourhood
+paris_list_and_avgP_nhood <- paris_listings %>% 
+                                # get rid of listings with no price
+                                subset(!(is.na(price))) %>% 
+                                # group data by neighbourhood/arrondissement
+                                group_by(neighbourhood) %>%
+                                # create new column with price avg in each neighborhood
+                                summarise(n_listings = n(), 
+                                          avg_price = mean(price)) %>% 
+                                # round prices to 0 decimal points
+                                mutate(across(avg_price, round, 0))
+
+
+# aggregate(price ~ neighbourhood_cleansed, data = paris_listings, function(x){sum(is.na(x))}, na.action = NULL)
+```
+
+
+
+```{r webscrape-paris}
+# Read html address with arrondissements data from wikipedia (in italian)
+wiki_paris_it <- 
+  read_html("https://it.wikipedia.org/wiki/Arrondissement_municipali_di_Parigi")
+
+## Scrape table with data for each arrondissement
+paris_arronds_it <- wiki_paris_it %>% 
+  html_element(".wikitable :nth-child(1)") %>%
+  html_table() %>% 
+  clean_names() %>% 
+  select(arr, nome, superficie_ha, 
+         popolazione_municipale_per_il_2010_e_2015_7, 
+         densita_di_popolazione_abitanti_km2_7) %>% 
+  slice(-c(1, 22, 23, 24)) %>% 
+  mutate(nome = ifelse(nome == "Elyseo", "Élysée", nome),
+         area_km2 = as.numeric(superficie_ha) / 100) %>% 
+  rename(neighbourhood = nome,
+         area_ha = superficie_ha,
+         pop_2017 = popolazione_municipale_per_il_2010_e_2015_7,
+         dens_2017 = densita_di_popolazione_abitanti_km2_7)
+
+```
+
+
+
+```{r merge-data}
+# Merge aggregated listings data with arrondissements data
+paris_arronds_full <- merge(paris_list_and_avgP_nhood, paris_arronds_it, 
+                            by.x = "neighbourhood", by.y = "neighbourhood")
+```
+
+
+```{r calc-new-vars-paris}
+# Create new variables for listings and price by km2 and by population
+
+## Calculate listings per 1000 people
+  # Get rid of empty space in population column & convert variable to numeric class
+paris_arronds_full$pop_2017 <- as.numeric(
+  str_replace(paris_arronds_full$pop_2017,"\\s", ""))
+  # Now create new variable for listings by population (and round new values)
+paris_arronds_full %<>% 
+  mutate(listings_by_pop = (n_listings)/(pop_2017)*1000, 
+         listings_by_pop = round(listings_by_pop))
+
+
+## Calculate listings per km2
+paris_arronds_full %<>% mutate(listings_km2 = (n_listings)/(area_km2),
+                               listings_km2 = round(listings_km2))
+
+```
+
+
+
+```{r merge-agg-and-geo-data}
+# Merge geospatial data (sf object) with lyon airbnb listings data
+paris_merged <- merge(paris_arronds_full, paris_nhoods_geodata, 
+                      by.x = "neighbourhood", by.y = "neighbourhood")
+
+# Convert new dataframe into an sf object
+paris_merged_sf <- st_as_sf(paris_merged) #%>% st_transform(8857)
+
+```
+
+```{r create-objs-for-leaflet}
+### Create objects for leaflet (interactive map) icons
+
+# Create data for landmark icons
+landmarks_coords <- sp::SpatialPointsDataFrame(
+  cbind(c(2.2945, 2.295, 2.3507, 2.3380, 2.3346),        # lng
+        c(48.8583, 48.8738, 48.8527, 48.8855, 48.8648)   # lat
+  ),
+  data.frame(landmark = factor(c("eiffel_tower", "arc_de_triomphe", 
+                                 "notre_dame", "montmartre", "louvre")),
+             landmark_name = factor(c("Eiffel Tower", "Arc de Triomphe", 
+                                      "Notre Dame", "Montmartre", "The Louvre")))
+)
+
+# Create icons
+paris_icons <- iconList(
+  eiffel_tower = makeIcon("/files/eiffel-tower.png", 28, 28),
+  arc_de_triomphe = makeIcon("/files/arc-de-triomphe.png", 20, 20),
+  notre_dame = makeIcon("/files/notre-dame.png", 20, 20),
+  montmartre = makeIcon("/files/montmartre.png", 20, 20),
+  louvre = makeIcon("/files/louvre.png", 25, 25))
+
+```
+
+Column {data-width=425}
+-----------------------------------------------------------------------
+
+### Number of listings per arrondissement
+
+```{r leaflet-tot-list}
+# Set a color palette
+col_pal_listings <- colorNumeric(palette = "viridis", domain = paris_merged_sf$n_listings)
+# Create labels ->> FIX: change arrondm label from nhood name to arr number
+labels_n_listings <- sprintf(
+  "<strong>%s</strong><br/> Listings per 1000 people: %g",
+  paris_merged_sf$neighbourhood, paris_merged_sf$n_listings) %>% 
+  lapply(htmltools::HTML)
+
+# Code for interactive Map
+paris_merged_sf %>% 
+  st_transform(crs = 4326) %>%  # EPSG central france: 27562
+  leaflet(width = "100%") %>% 
+  addProviderTiles(provider = "CartoDB.Positron") %>% 
+  addPolygons(
+    #popup = ~paste0(neighbourhood_cleansed, "<br>", "Total listings: ", n_listings),
+    label = labels_n_listings,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "12px",
+      direction = "auto"),
+    stroke = TRUE,
+    weight = 1,
+    opacity = 10,
+    smoothFactor = 0,
+    #dashArray = 2,
+    fillOpacity = 0.65,
+    color = ~col_pal_listings(n_listings),
+    highlightOptions = highlightOptions(
+      weight = 10,
+      color = col_pal_listings, #blackish grey #313130
+      #dashArray = "",
+      fillOpacity = 0.9,
+      bringToFront = TRUE)
+  ) %>%
+  addLegend(
+    "topright",
+    title = "Total Listings",
+    values = ~n_listings, 
+    labFormat = labelFormat(prefix = ""),
+    pal = col_pal_listings,
+    opacity = 1
+  ) %>% 
+  addMarkers(
+    data = landmarks_coords,
+    icon = ~paris_icons[landmark],
+    label = ~landmark_name, 
+    group = "Landmarks"
+    ) %>% 
+  addLayersControl(
+    overlayGroups = c("Landmarks"),
+    options = layersControlOptions(collapsed=FALSE))
+
+```
+
+### Average listing price per night
+
+```{r leaflet-avgprice}
+# Set a color palette
+col_pal_price <- colorNumeric(palette = "viridis", domain = paris_merged_sf$avg_price)
+# Create labels
+labels_avg_price <- sprintf(
+  "<strong>%s</strong><br/> Average price: $%g",
+  paris_merged_sf$neighbourhood, paris_merged_sf$avg_price) %>% 
+  lapply(htmltools::HTML)
+
+# Code for interactive Map
+paris_merged_sf %>% 
+  st_transform(crs = 4326) %>%  # EPSG central france: 27562
+  leaflet(width = "100%", height = 400) %>%  # height  = 700 ?
+  addProviderTiles("CartoDB.Positron", group = "Base 1") %>% # CartoDB.Positron / OpenStreetMap.Mapnik
+  addPolygons(data = paris_merged_sf, 
+    #popup = ~paste0(neighbourhood_cleansed, "<br>", "Listings per km<sup>2</sup>: ", listings_km2),
+    label = labels_avg_price, 
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "12px",
+      direction = "auto"),
+    stroke = TRUE,
+    weight = 1,
+    opacity = 10,
+    smoothFactor = 0,
+    #dashArray = 2,
+    fillOpacity = 0.65,
+    color = ~col_pal_price(avg_price),
+    highlightOptions = highlightOptions(
+      weight = 10,
+      color = col_pal_price, #blackish grey #313130
+      #dashArray = "",
+      fillOpacity = 0.9,
+      bringToFront = TRUE)
+    ) %>% 
+  addLegend(
+    "topright",
+    title = "Average price <br> per night",
+    values = ~avg_price, 
+    labFormat = labelFormat(prefix = "$ "),
+    pal = col_pal_price,
+    opacity = 1
+    ) %>% 
+  addMarkers(
+    data = landmarks_coords,
+    icon = ~paris_icons[landmark], 
+    label = ~landmark_name, 
+    group = "Landmarks") %>%
+  addLayersControl(
+    #baseGroups = c("Base 1", "Base 2", "Base 3", "Base 4", "Base 5"),
+    overlayGroups = c("Landmarks"),
+    options = layersControlOptions(collapsed=FALSE))
+
+```
+
+
+
+Column {data-width=425}
+-----------------------------------------------------------------------
+
+### Listings by population
+
+```{r leaflet-pop}
+# Set a color palette
+col_pal_pop <- colorNumeric(palette = "viridis", domain = paris_merged_sf$listings_by_pop)
+# Create labels
+labels_listings_pop <- sprintf(
+  "<strong>%s</strong><br/> Listings per 1000 people: %g",
+  paris_merged_sf$arr, paris_merged_sf$listings_by_pop) %>% 
+  lapply(htmltools::HTML)
+
+
+# Code for interactive Map
+paris_merged_sf %>% 
+  st_transform(crs = 4326) %>%  # EPSG central france: 27562
+  leaflet(width = "100%") %>% 
+  addProviderTiles(provider = "CartoDB.Positron") %>% 
+  addPolygons(
+    #popup = ~paste0(neighbourhood_cleansed, "<br>", "Listings per 1000 people: ", listings_by_pop),
+    label = labels_listings_pop,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "12px",
+      direction = "auto"),
+    stroke = TRUE,
+    weight = 1,
+    opacity = 10,
+    smoothFactor = 0,
+    #dashArray = 2,
+    fillOpacity = 0.65,
+    color = ~col_pal_pop(listings_by_pop),
+    highlightOptions = highlightOptions(
+      weight = 10,
+      color = col_pal_pop, #blackish grey #313130
+      #dashArray = "",
+      fillOpacity = 0.9,
+      bringToFront = TRUE)
+  ) %>% 
+  addLegend(
+    "topright",
+    title = "Listings per <br> 1000 people",
+    values = ~listings_by_pop, 
+    labFormat = labelFormat(prefix = ""),
+    pal = col_pal_pop,
+    opacity = 1
+  ) %>% 
+  addMarkers(
+    data = landmarks_coords,
+    icon = ~paris_icons[landmark], 
+    label = ~landmark_name, 
+    group = "Landmarks") %>% 
+  addLayersControl(
+    overlayGroups = c("Landmarks"),
+    options = layersControlOptions(collapsed=FALSE))
+```
+
+### Listings by area
+
+```{r leaflet-sqkm}
+# Set a color palette
+col_pal_km2 <- colorNumeric(palette = "viridis", domain = paris_merged_sf$listings_km2)
+# Create labels
+labels_listings_km2 <- sprintf(
+  "<strong>%s</strong><br/> Listings per km<sup>2</sup>: %g",
+  paris_merged_sf$neighbourhood, paris_merged_sf$listings_km2) %>% 
+  lapply(htmltools::HTML)
+
+# Code for interactive Map
+leaflet(width = "100%") %>% 
+  addProviderTiles(provider = "CartoDB.Positron") %>% 
+  addPolygons(data = paris_merged_sf, 
+    #popup = ~paste0(neighbourhood_cleansed, "<br>", "Listings per km<sup>2</sup>: ", listings_km2),
+    label = labels_listings_km2, 
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "12px",
+      direction = "auto"),
+    stroke = TRUE,
+    weight = 1,
+    opacity = 10,
+    smoothFactor = 0,
+    #dashArray = 2,
+    fillOpacity = 0.65,
+    color = ~col_pal_km2(listings_km2),
+    highlightOptions = highlightOptions(
+      weight = 10,
+      color = col_pal_km2, #blackish grey #313130
+      #dashArray = "",
+      fillOpacity = 0.9,
+      bringToFront = TRUE)
+  ) %>% 
+  addLegend(data = paris_merged_sf, 
+    "topright",
+    title = "Listings <br> per km<sup>2</sup>",
+    values = ~listings_km2, 
+    labFormat = labelFormat(prefix = ""),
+    pal = col_pal_km2,
+    opacity = 1
+  ) %>% 
+  addMarkers(
+    data = landmarks_coords, 
+    icon = ~paris_icons[landmark], 
+    label = ~landmark_name, 
+    group = "Landmarks") %>% 
+  addLayersControl(
+    overlayGroups = c("Landmarks"),
+    options = layersControlOptions(collapsed=FALSE))
+```
+
